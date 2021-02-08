@@ -1,0 +1,63 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+: "${BUILDKITE_PLUGIN_AWS_IAM_ANNOTATE_IAMLIVE_VERSION:=v0.12}"
+: "${BUILDKITE_PLUGIN_AWS_IAM_ANNOTATE_FAILS_ONLY:=false}"
+
+capture_iam_usage() {
+	# Ensure the iamlive CLI exists.
+	export PATH=.:${PATH}
+	if ! type iamlive &>/dev/null; then
+		# NOTE: Lazily support Linux and amd64 only for now.
+		local ver="${BUILDKITE_PLUGIN_AWS_IAM_ANNOTATE_IAMLIVE_VERSION}"
+		local rel=https://github.com/iann0036/iamlive/releases/download/${ver}
+		local bin=iamlive-${ver}-linux-amd64.tar.gz
+
+		echo "--- :aws: Downloading iamlive CLI"
+		curl -sLf ${rel}/${bin} | tar xvz- && chmod +x iamlive
+	fi
+
+	# Capture.
+	local args="--output-file iamlive.json --set-ini"
+	if [ "${BUILDKITE_PLUGIN_AWS_IAM_ANNOTATE_FAILS_ONLY}" = true ]; then
+		args+=" --fails-only"
+	fi
+
+	iamlive ${args} &>/dev/null &
+	export BUILDKITE_PLUGIN_AWS_IAM_ANNOTATE_IAMLIVE_PID=$!
+}
+
+annotate_iam_usage() {
+	# Cleanup.
+	local pid=${BUILDKITE_PLUGIN_AWS_IAM_ANNOTATE_IAMLIVE_PID}
+	set +e
+	kill -SIGHUP ${pid}
+	kill -SIGINT ${pid}
+	wait ${pid}
+	set -e
+
+	# Annotate.
+	local actions="$(jq -r '.?|.Statement[].Action[]' iamlive.json)"
+	[ ${#actions} = 0 ] && return 0
+
+	echo "--- :buildkite: Creating IAM annotation"
+	if [ "${BUILDKITE_PLUGIN_AWS_IAM_ANNOTATE_FAILS_ONLY}" = true ]; then
+		buildkite-agent annotate "<details>
+<summary>Failed IAM actions for command: ${BUILDKITE_LABEL}</summary>
+<code><pre>
+${actions}
+</pre></code>
+</details>" --style 'error' --context 'ctx-error'
+	else
+		buildkite-agent annotate "<details>
+<summary>All IAM actions for command: ${BUILDKITE_LABEL}</summary>
+<code><pre>
+${actions}
+</pre></code>
+</details>" --style 'info' --context 'ctx-info'
+	fi
+}
+
+capture_iam_usage
+trap annotate_iam_usage EXIT INT TERM
+bash -c "${BUILDKITE_COMMAND}"

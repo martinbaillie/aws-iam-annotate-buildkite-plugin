@@ -1,0 +1,13 @@
+name: AWS IAM Annotate
+description: Captures and annotates your Buildkite command's AWS IAM usage.
+author: https://github.com/martinbaillie
+requirements:
+  - curl
+  - jq
+configuration:
+  properties:
+    fails-only:
+      type: boolean
+    iamlive-version:
+      type: string
+  additionalProperties: false
